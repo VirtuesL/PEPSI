@@ -3,36 +3,6 @@ from tensorflow_addons.layers import SpectralNormalization
 from tensorflow.keras import layers
 from operations import *
 
-
-
-class FCSN(layers.Layer):
-  def __init__(self, trainable=True, name=None, dtype=None, dynamic=False, **kwargs):
-    super(FCSN, self).__init__(trainable, name, dtype, dynamic, **kwargs)
-
-  def build(self, input_shape):
-    super().build(input_shape)
-    _, w, h, c = input_shape.as_list()
-    
-    self.u = tf.Variable(tf.initializers.truncated_normal()(shape=[1,1]),shape=[1,1],trainable=False,name = 'snf_u')
-    self.w = tf.Variable(tf.initializers.glorot_normal()(shape=(h*w, 1, c, 1)),shape=(h*w, 1, c, 1), name = 'fc_n')
-    self.b = tf.Variable(tf.initializers.Constant()(shape=(1,h,w,1)),shape=(1,h,w,1),name="fc_b")
-
-  def call(self, inputs):
-    _, w, h, c = inputs.shape.as_list()
-    w_pixel = self.w[0:1, :, :, :]
-    sn_w = spectral_norm(w_pixel, self.u)
-    for i in range(1,h*w):
-      w_pixel = self.w[i:i+1, :, :, :]
-      sn_w_p = spectral_norm(w_pixel, self.u)
-
-      sn_w = tf.concat([sn_w,sn_w_p],axis = 0)
-    
-    w_rs = tf.reshape(sn_w, [h, w, c, 1])
-    w_rs_t = tf.transpose(w_rs, [3,0,1,2])
-    return tf.reduce_sum(inputs*w_rs_t + self.b, axis=3, keepdims=True)
-
-    
-
 class Encoder(layers.Layer):
   def __init__(self, trainable=True, name=None, dtype=None, dynamic=False, **kwargs):
     super(Encoder,self).__init__(trainable, name, dtype, dynamic, **kwargs)
@@ -138,8 +108,8 @@ class ContextAwareModule(layers.Layer):
   def call(self, inputs):
     g_in, mask = inputs
     b, h, w, dims = g_in.shape.as_list()
-    #b = b or 1
-    temp = tf.image.resize(mask,(h,w),tf.image.ResizeMethod.NEAREST_NEIGHBOR) # b 128 128
+    b = b or 8
+    temp = tf.image.resize(mask,(h,w),tf.image.ResizeMethod.NEAREST_NEIGHBOR) # b 128 128 1
     temp = tf.expand_dims(temp[:, :, :, 0], 3) # b 128 128 128
     
     mask_r = tf.tile(temp, [1, 1, 1, dims])
@@ -178,9 +148,9 @@ class ContextAwareModule(layers.Layer):
       else:
         ACL = tf.concat([ACL,ACLt],0)
 
-      ACL = bg + ACL * (1-mask_r)
-      con1 = tf.concat([g_in,ACL], 3)
-      return self.ACL2(con1)
+    ACL = bg + ACL * (1-mask_r)
+    con1 = tf.concat([g_in,ACL], 3)
+    return self.ACL2(con1)
 
 class PEPSI(tf.keras.Model):
   def __init__(self, max_epochs):
@@ -199,17 +169,11 @@ class PEPSI(tf.keras.Model):
     return tf.reduce_mean(tf.nn.relu(1+D_fake_red)) + tf.reduce_mean(tf.nn.relu(1-D_real_red))
 
   
-  def Loss_G(self, I_co, I_ge, image_result, D_fake_red, Y):
+  def Loss_G(self, I_co, I_ge, D_fake_red, Y):
     Loss_gan = -tf.reduce_mean(D_fake_red)
 
     Loss_s_re = tf.reduce_mean(tf.abs(I_ge - Y))
     Loss_hat = tf.reduce_mean(tf.abs(I_co - Y))
-
-    A = tf.image.rgb_to_yuv((image_result+1)/2.0)
-    A_Y = tf.cast(A[:, :, :, 0:1]*255.0,dtype=tf.int32)
-
-    B = tf.image.rgb_to_yuv((Y+1)/2.0)
-    B_Y = tf.cast(B[:, :, :, 0:1]*255.0,dtype=tf.int32)
 
     return (0.1*Loss_gan + 10*Loss_s_re + 5*(1-self.alpha) * Loss_hat, Loss_s_re)
 
@@ -221,7 +185,7 @@ class PEPSI(tf.keras.Model):
 
   def call(self, inputs):
     inputs, reals, mask = inputs
-    encoded = self.encoder(inputs)
+    encoded = self.encoder(tf.concat([inputs, mask], 3))
     cammed = self.cam((encoded,mask))
     I_co = self.decoder(encoded)
     I_ge = self.decoder(cammed)
@@ -234,18 +198,16 @@ class PEPSI(tf.keras.Model):
     return I_co, I_ge, image_result, D_fake_red, D_real_red
 
   def train_step(self, data:tf.Tensor):
+    masked, reals, masks = data
     with tf.GradientTape(persistent=True) as tape:
       I_co, I_ge, image_result, D_fake_red, D_real_red = self(data)
-    
       loss_d = self.Loss_D(D_real_red, D_fake_red)
-      loss_g, loss_s_re = self.Loss_G(I_co, I_ge,image_result,D_fake_red,data[1])
+      loss_g, loss_s_re = self.Loss_G(I_co, I_ge,D_fake_red,reals)
 
     grads = tape.gradient(loss_d,self.RED.trainable_weights)
     self.d_optimiser.apply_gradients(zip(grads,self.RED.trainable_weights))
-    grads = tape.gradient(loss_g,[*self.encoder.trainable_weights,*self.decoder.trainable_weights,*self.cam.trainable_weights])
-    self.g_optimiser.apply_gradients(zip(grads,[*self.encoder.trainable_weights,*self.decoder.trainable_weights,*self.cam.trainable_weights]))
-    
-
-    #with tf.GradientTape() as tape:
+    grads = tape.gradient(loss_g, self.encoder.trainable_weights + self.decoder.trainable_weights + self.cam.trainable_weights)
+    self.g_optimiser.apply_gradients(zip(grads,self.encoder.trainable_weights + self.decoder.trainable_weights + self.cam.trainable_weights))
+  
 
     return {"d_loss": loss_d, "g_loss": loss_g, "recon_loss": loss_s_re}
