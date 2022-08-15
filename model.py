@@ -182,6 +182,12 @@ class PEPSI(tf.keras.Model):
     super(PEPSI, self).compile()
     self.d_optimiser = d_optimiser
     self.g_optimiser = g_optimiser
+    self.d_loss_metric = tf.keras.metrics.Mean("d_loss")
+    self.g_loss_metric = tf.keras.metrics.Mean("g_loss")
+
+  @property
+  def metrics(self):
+    return [self.d_loss_metric, self.g_loss_metric]
 
   def call(self, inputs):
     inputs, reals, mask = inputs
@@ -203,6 +209,9 @@ class PEPSI(tf.keras.Model):
       I_co, I_ge, image_result, D_fake_red, D_real_red = self(data)
       loss_d = self.Loss_D(D_real_red, D_fake_red)
       loss_g, loss_s_re = self.Loss_G(I_co, I_ge,D_fake_red,reals)
+    
+    self.d_loss_metric.update_state(loss_d)
+    self.g_loss_metric.update_state(loss_g)
 
     grads = tape.gradient(loss_d,self.RED.trainable_weights)
     self.d_optimiser.apply_gradients(zip(grads,self.RED.trainable_weights))
@@ -210,4 +219,4 @@ class PEPSI(tf.keras.Model):
     self.g_optimiser.apply_gradients(zip(grads,self.encoder.trainable_weights + self.decoder.trainable_weights + self.cam.trainable_weights))
   
 
-    return {"d_loss": loss_d, "g_loss": loss_g, "recon_loss": loss_s_re}
+    return { "d_loss": self.d_loss_metric.result(), "g_loss": self.g_loss_metric.result() }
