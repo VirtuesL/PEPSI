@@ -141,5 +141,5 @@ def MakeImageBlock(Qfilenames, Height, Width, i, batch_size, resize=True):
     return Image
 
 class epochCallback(tf.keras.callbacks.Callback):
-    def on_epoch_begin(self, epoch, logs=None):
-        self.model.set_alpha((epoch)/self.model.max_epochs)
+    def on_batch_begin(self, _, logs=None):
+        self.model.iters += 8

@@ -153,17 +153,18 @@ class ContextAwareModule(layers.Layer):
     return self.ACL2(con1)
 
 class PEPSI(tf.keras.Model):
-  def __init__(self, max_epochs):
+  def __init__(self, max_iters):
     super(PEPSI, self).__init__()
-    self.max_epochs = max_epochs
-    self.alpha = 0
-    self.encoder = Encoder(name="G_en")
-    self.decoder = Decoder(name="G_de")
-    self.cam = ContextAwareModule(name="CB1")
-    self.RED = Discriminator_red(name="disc_red")
+    self.max_iters = max_iters
+    self.iters = 0
+    self.encoder = Encoder(name="Encoder")
+    self.decoder = Decoder(name="Decoder")
+    self.cam = ContextAwareModule(name="Contextual Block")
+    self.RED = Discriminator_red(name="RED Discriminator")
 
-  def set_alpha(self,alpha):
-    self.alpha = alpha
+  def alpha(self):
+    return self.iters/self.max_iters
+    
 
   def Loss_D(self, D_real_red, D_fake_red):
     return tf.reduce_mean(tf.nn.relu(1+D_fake_red)) + tf.reduce_mean(tf.nn.relu(1-D_real_red))
@@ -175,7 +176,7 @@ class PEPSI(tf.keras.Model):
     Loss_s_re = tf.reduce_mean(tf.abs(I_ge - Y))
     Loss_hat = tf.reduce_mean(tf.abs(I_co - Y))
 
-    return (0.1*Loss_gan + 10*Loss_s_re + 5*(1-self.alpha) * Loss_hat, Loss_s_re)
+    return 0.1*Loss_gan + 10*Loss_s_re + 5*(1-self.alpha()) * Loss_hat
 
     
   def compile(self, d_optimiser, g_optimiser):
@@ -203,12 +204,13 @@ class PEPSI(tf.keras.Model):
 
     return I_co, I_ge, image_result, D_fake_red, D_real_red
 
+  @tf.function()
   def train_step(self, data:tf.Tensor):
     masked, reals, masks = data
     with tf.GradientTape(persistent=True) as tape:
       I_co, I_ge, image_result, D_fake_red, D_real_red = self(data)
       loss_d = self.Loss_D(D_real_red, D_fake_red)
-      loss_g, loss_s_re = self.Loss_G(I_co, I_ge,D_fake_red,reals)
+      loss_g = self.Loss_G(I_co, I_ge,D_fake_red,reals)
     
     self.d_loss_metric.update_state(loss_d)
     self.g_loss_metric.update_state(loss_g)
