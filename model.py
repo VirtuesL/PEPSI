@@ -159,8 +159,8 @@ class PEPSI(tf.keras.Model):
     self.iters = 0
     self.encoder = Encoder(name="Encoder")
     self.decoder = Decoder(name="Decoder")
-    self.cam = ContextAwareModule(name="Contextual Block")
-    self.RED = Discriminator_red(name="RED Discriminator")
+    self.cam = ContextAwareModule(name="Contextual_Block")
+    self.RED = Discriminator_red(name="RED_Discriminator")
 
   def alpha(self):
     return self.iters/self.max_iters

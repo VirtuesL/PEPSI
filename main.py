@@ -21,7 +21,7 @@ model.compile(
   g_optimiser=tf.optimizers.Adam(learning_rate=0.0001, beta_1=0.5, beta_2=0.9)
   )
 
-data = dataset.shuffle().take(1)
+data = dataset.shuffle(100).take(1)
 masked, real, mask = list(*data.as_numpy_iterator())
 
 saves = glob.glob("*.h5")
