@@ -6,7 +6,6 @@ import imageio as misc
 import cv2
 
 
-@tf.function
 def spectral_norm(w,u):
   w_shape = w.shape.as_list()
   w = tf.reshape(w,[-1,w_shape[-1]])
@@ -128,7 +127,7 @@ def MakeImageBlock(Qfilenames, Height, Width, i, batch_size, resize=True):
             Loadimage = Loadimage[:, :, 0:3]
 
         if resize:
-            Loadimage = cv2.resize(L,(256,256))
+            Loadimage = cv2.resize(Loadimage,(256,256))
 
         Loadimage = Loadimage.astype(np.float32)
 
@@ -139,7 +138,3 @@ def MakeImageBlock(Qfilenames, Height, Width, i, batch_size, resize=True):
         iCount = iCount + 1
 
     return Image
-
-class epochCallback(tf.keras.callbacks.Callback):
-    def on_batch_begin(self, _, logs=None):
-        self.model.iters += 8

@@ -102,11 +102,10 @@ class ContextAwareModule(layers.Layer):
     super().__init__(trainable, name, dtype, dynamic, **kwargs)
 
   def build(self, input_shape):
-    _, _, _, dims = input_shape[0].as_list()
+    _, _, _, dims = input_shape.as_list()
     self.ACL2 = layers.Conv2D(dims, [1,1], strides=(1,1), activation=tf.nn.elu)
 
-  def call(self, inputs):
-    g_in, mask = inputs
+  def call(self, g_in, mask):
     b, h, w, dims = g_in.shape.as_list()
     b = b or 8
     temp = tf.image.resize(mask,(h,w),tf.image.ResizeMethod.NEAREST_NEIGHBOR) # b 128 128 1
@@ -120,7 +119,7 @@ class ContextAwareModule(layers.Layer):
 
     patch1 = tf.image.extract_patches(bg,[1,3,3,1],[1,1,1,1],[1,1,1,1],'VALID')
     patch1 = tf.reshape(patch1, [b, 1, c, 3*3*dims])
-    patch1 = tf.reshape(patch1, (b, 1, 1, c, 3*3*dims))
+    patch1 = tf.reshape(patch1, [b, 1, 1, c, 3*3*dims])
     patch1 = tf.transpose(patch1, [0, 1, 2, 4, 3])
     
     patch2 = tf.image.extract_patches(g_in,[1,3,3,1],[1,1,1,1],[1,1,1,1],'SAME')
@@ -139,7 +138,7 @@ class ContextAwareModule(layers.Layer):
 
       DS1 = tf.expand_dims(tt,0) - 2*CS
       DS2 = (DS1 - tf.reduce_mean(DS1, 3, True)) / tf.math.reduce_std(DS1,3,True)
-      DS2 = -tf.tanh(DS2)
+      DS2 = -1*tf.tanh(DS2)
 
       CA = tf.math.softmax(50.0*DS2)
       ACLt = tf.nn.conv2d_transpose(CA,k2,output_shape=[1,h,w,dims], strides=[1,1,1,1], padding='SAME') / 9
@@ -148,23 +147,19 @@ class ContextAwareModule(layers.Layer):
       else:
         ACL = tf.concat([ACL,ACLt],0)
 
-    ACL = bg + ACL * (1-mask_r)
+    ACL = bg + ACL * (1.0-mask_r)
     con1 = tf.concat([g_in,ACL], 3)
     return self.ACL2(con1)
 
 class PEPSI(tf.keras.Model):
   def __init__(self, max_iters):
     super(PEPSI, self).__init__()
-    self.max_iters = max_iters
-    self.iters = 0
+    self.max_iters = tf.constant(max_iters,dtype=tf.float32)
+    self.iters = tf.Variable(0.0,trainable=False,dtype=tf.float32)
     self.encoder = Encoder(name="Encoder")
     self.decoder = Decoder(name="Decoder")
     self.cam = ContextAwareModule(name="Contextual_Block")
     self.RED = Discriminator_red(name="RED_Discriminator")
-
-  def alpha(self):
-    return self.iters/self.max_iters
-    
 
   def Loss_D(self, D_real_red, D_fake_red):
     return tf.reduce_mean(tf.nn.relu(1+D_fake_red)) + tf.reduce_mean(tf.nn.relu(1-D_real_red))
@@ -176,7 +171,7 @@ class PEPSI(tf.keras.Model):
     Loss_s_re = tf.reduce_mean(tf.abs(I_ge - Y))
     Loss_hat = tf.reduce_mean(tf.abs(I_co - Y))
 
-    return 0.1*Loss_gan + 10*Loss_s_re + 5*(1-self.alpha()) * Loss_hat
+    return 0.1*Loss_gan + 10*Loss_s_re + 5*(1-(self.iters/self.max_iters)) * Loss_hat
 
     
   def compile(self, d_optimiser, g_optimiser):
@@ -190,25 +185,27 @@ class PEPSI(tf.keras.Model):
   def metrics(self):
     return [self.d_loss_metric, self.g_loss_metric]
 
-  def call(self, inputs):
-    inputs, reals, mask = inputs
-    encoded = self.encoder(tf.concat([inputs, mask], 3))
-    cammed = self.cam((encoded,mask))
-    I_co = self.decoder(encoded)
+  def call(self, inputs, masks, reals=None, training=False):
+    combined = tf.concat([inputs, masks], 3)
+    encoded = self.encoder(combined)
+    cammed = self.cam(encoded,masks)
     I_ge = self.decoder(cammed)
+    if training:
+      I_co = self.decoder(encoded)
+      D_real_red = self.RED(reals)
+      D_fake_red = self.RED(image_result)
 
-    image_result = I_ge * (1-mask) + reals*mask
+      return I_co, I_ge, D_fake_red, D_real_red
 
-    D_real_red = self.RED(reals)
-    D_fake_red = self.RED(image_result)
+    image_result = I_ge * (1-masks) + inputs
+    
+    return image_result
 
-    return I_co, I_ge, image_result, D_fake_red, D_real_red
-
-  @tf.function()
+  @tf.function
   def train_step(self, data:tf.Tensor):
     masked, reals, masks = data
     with tf.GradientTape(persistent=True) as tape:
-      I_co, I_ge, image_result, D_fake_red, D_real_red = self(data)
+      I_co, I_ge, D_fake_red, D_real_red = self(masked,masks,reals,True)
       loss_d = self.Loss_D(D_real_red, D_fake_red)
       loss_g = self.Loss_G(I_co, I_ge,D_fake_red,reals)
     
@@ -219,6 +216,7 @@ class PEPSI(tf.keras.Model):
     self.d_optimiser.apply_gradients(zip(grads,self.RED.trainable_weights))
     grads = tape.gradient(loss_g, self.encoder.trainable_weights + self.decoder.trainable_weights + self.cam.trainable_weights)
     self.g_optimiser.apply_gradients(zip(grads,self.encoder.trainable_weights + self.decoder.trainable_weights + self.cam.trainable_weights))
-  
+
+    self.iters.assign_add(8)
 
     return { "d_loss": self.d_loss_metric.result(), "g_loss": self.g_loss_metric.result() }

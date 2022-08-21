@@ -35,7 +35,7 @@ else:
   latest_save = (None, 0)
 
 for i in range(latest_save[1],loops):
-  model.fit(dataset.repeat(),batch_size=8,callbacks=[tbcb,epcb],steps_per_epoch=num_ims//(EPOCHS),epochs=EPOCHS)
+  model.fit(dataset.repeat(),batch_size=8,callbacks=[tbcb],steps_per_epoch=num_ims//(EPOCHS),epochs=EPOCHS)
   I_co, I_ge, image_result, D_fake_red, D_real_red  = model.predict((masked,real,mask),batch_size=8)
   with fw.as_default():
     tf.summary.image("inputs",masked,step=i,max_outputs=8)
